@@ -21,7 +21,8 @@ export const CoinflipPage: React.FC = () => {
     createMatch, 
     joinMatch, 
     cancelMatch,
-    resetFlipResult
+    resetFlipResult,
+    setFlipResult
   } = useMatchStore();
   const [userId, setUserId] = useState<string | null>(null);
 
@@ -34,7 +35,7 @@ export const CoinflipPage: React.FC = () => {
     fetchUser();
     fetchMatches();
 
-    // Subscribe to changes for real-time sync
+    // Subscribe to changes for real-time coin flip synchronization
     const channel = supabase
       .channel('matches')
       .on('postgres_changes', { 
@@ -48,50 +49,30 @@ export const CoinflipPage: React.FC = () => {
         const { data: { user } } = await supabase.auth.getUser();
         
         if (user && updatedMatch) {
-          // Если кто-то присоединился к матчу (member_id добавился)
-          if (updatedMatch.member_id && updatedMatch.status === 'active' && !updatedMatch.result) {
-            const isParticipant = updatedMatch.creator_id === user.id || updatedMatch.member_id === user.id;
+          const isParticipant = updatedMatch.creator_id === user.id || updatedMatch.member_id === user.id;
+          
+          if (isParticipant) {
+            // Determine user's side
+            const userSide = updatedMatch.creator_id === user.id 
+              ? updatedMatch.selected_side 
+              : (updatedMatch.selected_side === 'heads' ? 'tails' : 'heads');
             
-            if (isParticipant) {
-              // Определяем сторону пользователя
-              const userSide = updatedMatch.creator_id === user.id 
-                ? updatedMatch.selected_side 
-                : (updatedMatch.selected_side === 'heads' ? 'tails' : 'heads');
-              
-              // Начинаем анимацию у всех участников
-              useMatchStore.getState().setFlipResult({
+            // If match becomes pending (coin flip starts)
+            if (updatedMatch.status === 'pending' && updatedMatch.result) {
+              console.log('Starting coin flip animation for user:', user.id);
+              setFlipResult({
                 result: null,
                 winnerSide: null,
                 userSide: userSide,
                 isFlipping: true,
                 showModal: true,
               });
-              
-              // Только создатель генерирует результат
-              if (updatedMatch.creator_id === user.id) {
-                setTimeout(async () => {
-                  const result = Math.random() < 0.5 ? 'heads' : 'tails';
-                  
-                  await supabase
-                    .from('matches')
-                    .update({ status: 'completed', result })
-                    .eq('id', updatedMatch.id);
-                }, 2000);
-              }
             }
-          }
-          
-          // Если матч завершен (получен результат)
-          if (updatedMatch.status === 'completed' && updatedMatch.result) {
-            const isParticipant = updatedMatch.creator_id === user.id || updatedMatch.member_id === user.id;
             
-            if (isParticipant) {
-              const userSide = updatedMatch.creator_id === user.id 
-                ? updatedMatch.selected_side 
-                : (updatedMatch.selected_side === 'heads' ? 'tails' : 'heads');
-              
-              // Показываем результат
-              useMatchStore.getState().setFlipResult({
+            // If match becomes completed (reveal result)
+            if (updatedMatch.status === 'completed' && updatedMatch.result) {
+              console.log('Revealing coin flip result:', updatedMatch.result);
+              setFlipResult({
                 result: updatedMatch.result,
                 winnerSide: updatedMatch.result,
                 userSide: userSide,
@@ -102,7 +83,7 @@ export const CoinflipPage: React.FC = () => {
           }
         }
         
-        // Обновляем список матчей
+        // Update matches list
         fetchMatches();
       })
       .subscribe();
@@ -110,7 +91,7 @@ export const CoinflipPage: React.FC = () => {
     return () => {
       channel.unsubscribe();
     };
-  }, [fetchMatches]);
+  }, [fetchMatches, setFlipResult]);
 
   // Fetch items for display
   const [allItems, setAllItems] = useState<any[]>([]);

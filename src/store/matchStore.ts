@@ -7,7 +7,7 @@ interface Match {
   member_id?: string;
   items_ids: string[];
   selected_side: 'heads' | 'tails';
-  status: 'active' | 'completed';
+  status: 'active' | 'pending' | 'completed';
   result?: 'heads' | 'tails';
   created_at: string;
 }
@@ -191,17 +191,9 @@ export const useMatchStore = create<MatchStore>((set, get) => ({
       throw new Error(`Total value must be between ${Math.floor(matchValue * 0.9)} and ${Math.ceil(matchValue * 1.1)} coins`);
     }
 
-    // Show coin flip animation
-    const oppositeSide = matchData.selected_side === 'heads' ? 'tails' : 'heads';
-    set({ 
-      flipResult: {
-        result: null,
-        winnerSide: null,
-        userSide: oppositeSide,
-        isFlipping: true,
-        showModal: true,
-      }
-    });
+    // Generate the coin flip result immediately
+    const result = Math.random() < 0.5 ? 'heads' : 'tails';
+    console.log('Generated result:', result);
 
     // Use RPC function for atomic update to prevent race conditions
     const { data: updateResult, error: updateError } = await supabase.rpc('join_match_atomic', {
@@ -215,17 +207,6 @@ export const useMatchStore = create<MatchStore>((set, get) => ({
     if (updateError) {
       console.error('Error updating match:', updateError);
       
-      // Reset flip result on error
-      set({ 
-        flipResult: {
-          result: null,
-          winnerSide: null,
-          userSide: null,
-          isFlipping: false,
-          showModal: false,
-        }
-      });
-      
       if (updateError.message?.includes('already has a member')) {
         throw new Error('Another player joined this match first. Please try a different match.');
       } else if (updateError.message?.includes('not found')) {
@@ -237,56 +218,37 @@ export const useMatchStore = create<MatchStore>((set, get) => ({
 
     if (!updateResult || !updateResult.success) {
       console.error('Match update failed:', updateResult);
-      
-      // Reset flip result on error
-      set({ 
-        flipResult: {
-          result: null,
-          winnerSide: null,
-          userSide: null,
-          isFlipping: false,
-          showModal: false,
-        }
-      });
-      
       throw new Error('The match is no longer available. Another player may have joined it first.');
     }
 
     console.log('Match joined successfully');
 
-    // NOTE: Inventory update is now handled by the join_match_atomic RPC function
-    // Removed client-side inventory update to prevent RLS policy violations
+    // Update match to pending status with the pre-generated result
+    // This will trigger the realtime sync for both players
+    const { error: pendingError } = await supabase
+      .from('matches')
+      .update({ 
+        status: 'pending',
+        result: result // Store the result but don't reveal it yet
+      })
+      .eq('id', matchId);
 
-    // Simulate coin flip delay (2 seconds)
+    if (pendingError) {
+      console.error('Error setting match to pending:', pendingError);
+    }
+
+    // After 2 seconds, reveal the result by setting status to completed
     setTimeout(async () => {
-      // Generate random result (50/50 chance)
-      const result = Math.random() < 0.5 ? 'heads' : 'tails';
-      const winnerSide = result;
-      
-      console.log('Match result:', result, 'User side:', oppositeSide, 'Won:', result === oppositeSide);
-      
-      // Update match with result - the database trigger will handle item transfer
       const { error } = await supabase
         .from('matches')
-        .update({ status: 'completed', result })
+        .update({ status: 'completed' })
         .eq('id', matchId);
 
       if (error) {
-        console.error('Error updating match:', error);
+        console.error('Error completing match:', error);
       } else {
         console.log('Match completed successfully');
       }
-
-      // Update flip result
-      set({ 
-        flipResult: {
-          result,
-          winnerSide,
-          userSide: oppositeSide,
-          isFlipping: false,
-          showModal: true,
-        }
-      });
 
       await get().fetchMatches();
     }, 2000);
