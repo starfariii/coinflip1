@@ -21,7 +21,8 @@ export const CoinflipPage: React.FC = () => {
     createMatch, 
     joinMatch, 
     cancelMatch,
-    resetFlipResult
+    resetFlipResult,
+    subscribeToMatches
   } = useMatchStore();
   const [userId, setUserId] = useState<string | null>(null);
 
@@ -34,18 +35,13 @@ export const CoinflipPage: React.FC = () => {
     fetchUser();
     fetchMatches();
 
-    // Subscribe to changes
-    const channel = supabase
-      .channel('matches')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'matches' }, () => {
-        fetchMatches();
-      })
-      .subscribe();
+    // Подписываемся на изменения матчей для синхронизации
+    const unsubscribe = subscribeToMatches();
 
     return () => {
-      channel.unsubscribe();
+      unsubscribe();
     };
-  }, [fetchMatches]);
+  }, [fetchMatches, subscribeToMatches]);
 
   // Fetch items for display
   const [allItems, setAllItems] = useState<any[]>([]);
