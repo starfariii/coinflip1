@@ -28,7 +28,6 @@ interface MatchStore {
   cancelMatch: (matchId: string) => Promise<void>;
   setFlipResult: (result: any) => void;
   resetFlipResult: () => void;
-  subscribeToMatches: () => () => void;
 }
 
 export const useMatchStore = create<MatchStore>((set, get) => ({
@@ -68,98 +67,6 @@ export const useMatchStore = create<MatchStore>((set, get) => ({
     }
 
     set({ loading: false });
-  },
-
-  subscribeToMatches: () => {
-    const channel = supabase
-      .channel('matches')
-      .on('postgres_changes', { 
-        event: '*', 
-        schema: 'public', 
-        table: 'matches' 
-      }, async (payload) => {
-        console.log('Match change detected:', payload);
-        
-        // Обновляем список матчей
-        await get().fetchMatches();
-        
-        // Проверяем, если матч был обновлен с member_id (кто-то присоединился)
-        if (payload.eventType === 'UPDATE' && payload.new) {
-          const updatedMatch = payload.new as Match;
-          const { data: { user } } = await supabase.auth.getUser();
-          
-          if (user && updatedMatch.member_id && updatedMatch.status === 'active') {
-            // Проверяем, участвует ли текущий пользователь в этом матче
-            const isParticipant = updatedMatch.creator_id === user.id || updatedMatch.member_id === user.id;
-            
-            if (isParticipant) {
-              // Определяем сторону пользователя
-              const userSide = updatedMatch.creator_id === user.id 
-                ? updatedMatch.selected_side 
-                : (updatedMatch.selected_side === 'heads' ? 'tails' : 'heads');
-              
-              // Начинаем анимацию кручения монетки
-              set({ 
-                flipResult: {
-                  result: null,
-                  winnerSide: null,
-                  userSide: userSide,
-                  isFlipping: true,
-                  showModal: true,
-                }
-              });
-              
-              // Через 2 секунды обновляем матч с результатом
-              setTimeout(async () => {
-                // Генерируем результат (50/50)
-                const result = Math.random() < 0.5 ? 'heads' : 'tails';
-                
-                // Обновляем матч с результатом (только создатель матча делает это)
-                if (updatedMatch.creator_id === user.id) {
-                  await supabase
-                    .from('matches')
-                    .update({ status: 'completed', result })
-                    .eq('id', updatedMatch.id);
-                }
-              }, 2000);
-            }
-          }
-        }
-        
-        // Проверяем, если матч завершен (получен результат)
-        if (payload.eventType === 'UPDATE' && payload.new) {
-          const completedMatch = payload.new as Match;
-          const { data: { user } } = await supabase.auth.getUser();
-          
-          if (user && completedMatch.status === 'completed' && completedMatch.result) {
-            // Проверяем, участвует ли текущий пользователь в этом матче
-            const isParticipant = completedMatch.creator_id === user.id || completedMatch.member_id === user.id;
-            
-            if (isParticipant) {
-              // Определяем сторону пользователя
-              const userSide = completedMatch.creator_id === user.id 
-                ? completedMatch.selected_side 
-                : (completedMatch.selected_side === 'heads' ? 'tails' : 'heads');
-              
-              // Показываем результат
-              set({ 
-                flipResult: {
-                  result: completedMatch.result,
-                  winnerSide: completedMatch.result,
-                  userSide: userSide,
-                  isFlipping: false,
-                  showModal: true,
-                }
-              });
-            }
-          }
-        }
-      })
-      .subscribe();
-
-    return () => {
-      channel.unsubscribe();
-    };
   },
 
   createMatch: async (side: 'heads' | 'tails', selectedItems: { itemId: string; inventoryIndex: number }[]) => {
@@ -284,6 +191,18 @@ export const useMatchStore = create<MatchStore>((set, get) => ({
       throw new Error(`Total value must be between ${Math.floor(matchValue * 0.9)} and ${Math.ceil(matchValue * 1.1)} coins`);
     }
 
+    // Show coin flip animation
+    const oppositeSide = matchData.selected_side === 'heads' ? 'tails' : 'heads';
+    set({ 
+      flipResult: {
+        result: null,
+        winnerSide: null,
+        userSide: oppositeSide,
+        isFlipping: true,
+        showModal: true,
+      }
+    });
+
     // Use RPC function for atomic update to prevent race conditions
     const { data: updateResult, error: updateError } = await supabase.rpc('join_match_atomic', {
       match_id: matchId,
@@ -296,6 +215,17 @@ export const useMatchStore = create<MatchStore>((set, get) => ({
     if (updateError) {
       console.error('Error updating match:', updateError);
       
+      // Reset flip result on error
+      set({ 
+        flipResult: {
+          result: null,
+          winnerSide: null,
+          userSide: null,
+          isFlipping: false,
+          showModal: false,
+        }
+      });
+      
       if (updateError.message?.includes('already has a member')) {
         throw new Error('Another player joined this match first. Please try a different match.');
       } else if (updateError.message?.includes('not found')) {
@@ -307,13 +237,59 @@ export const useMatchStore = create<MatchStore>((set, get) => ({
 
     if (!updateResult || !updateResult.success) {
       console.error('Match update failed:', updateResult);
+      
+      // Reset flip result on error
+      set({ 
+        flipResult: {
+          result: null,
+          winnerSide: null,
+          userSide: null,
+          isFlipping: false,
+          showModal: false,
+        }
+      });
+      
       throw new Error('The match is no longer available. Another player may have joined it first.');
     }
 
     console.log('Match joined successfully');
-    
-    // Обновляем список матчей
-    await get().fetchMatches();
+
+    // NOTE: Inventory update is now handled by the join_match_atomic RPC function
+    // Removed client-side inventory update to prevent RLS policy violations
+
+    // Simulate coin flip delay (2 seconds)
+    setTimeout(async () => {
+      // Generate random result (50/50 chance)
+      const result = Math.random() < 0.5 ? 'heads' : 'tails';
+      const winnerSide = result;
+      
+      console.log('Match result:', result, 'User side:', oppositeSide, 'Won:', result === oppositeSide);
+      
+      // Update match with result - the database trigger will handle item transfer
+      const { error } = await supabase
+        .from('matches')
+        .update({ status: 'completed', result })
+        .eq('id', matchId);
+
+      if (error) {
+        console.error('Error updating match:', error);
+      } else {
+        console.log('Match completed successfully');
+      }
+
+      // Update flip result
+      set({ 
+        flipResult: {
+          result,
+          winnerSide,
+          userSide: oppositeSide,
+          isFlipping: false,
+          showModal: true,
+        }
+      });
+
+      await get().fetchMatches();
+    }, 2000);
   },
 
   cancelMatch: async (matchId: string) => {

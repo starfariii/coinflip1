@@ -21,8 +21,7 @@ export const CoinflipPage: React.FC = () => {
     createMatch, 
     joinMatch, 
     cancelMatch,
-    resetFlipResult,
-    subscribeToMatches
+    resetFlipResult
   } = useMatchStore();
   const [userId, setUserId] = useState<string | null>(null);
 
@@ -35,13 +34,83 @@ export const CoinflipPage: React.FC = () => {
     fetchUser();
     fetchMatches();
 
-    // Подписываемся на изменения матчей для синхронизации
-    const unsubscribe = subscribeToMatches();
+    // Subscribe to changes for real-time sync
+    const channel = supabase
+      .channel('matches')
+      .on('postgres_changes', { 
+        event: 'UPDATE', 
+        schema: 'public', 
+        table: 'matches' 
+      }, async (payload) => {
+        console.log('Match updated:', payload);
+        
+        const updatedMatch = payload.new as any;
+        const { data: { user } } = await supabase.auth.getUser();
+        
+        if (user && updatedMatch) {
+          // Если кто-то присоединился к матчу (member_id добавился)
+          if (updatedMatch.member_id && updatedMatch.status === 'active' && !updatedMatch.result) {
+            const isParticipant = updatedMatch.creator_id === user.id || updatedMatch.member_id === user.id;
+            
+            if (isParticipant) {
+              // Определяем сторону пользователя
+              const userSide = updatedMatch.creator_id === user.id 
+                ? updatedMatch.selected_side 
+                : (updatedMatch.selected_side === 'heads' ? 'tails' : 'heads');
+              
+              // Начинаем анимацию у всех участников
+              useMatchStore.getState().setFlipResult({
+                result: null,
+                winnerSide: null,
+                userSide: userSide,
+                isFlipping: true,
+                showModal: true,
+              });
+              
+              // Только создатель генерирует результат
+              if (updatedMatch.creator_id === user.id) {
+                setTimeout(async () => {
+                  const result = Math.random() < 0.5 ? 'heads' : 'tails';
+                  
+                  await supabase
+                    .from('matches')
+                    .update({ status: 'completed', result })
+                    .eq('id', updatedMatch.id);
+                }, 2000);
+              }
+            }
+          }
+          
+          // Если матч завершен (получен результат)
+          if (updatedMatch.status === 'completed' && updatedMatch.result) {
+            const isParticipant = updatedMatch.creator_id === user.id || updatedMatch.member_id === user.id;
+            
+            if (isParticipant) {
+              const userSide = updatedMatch.creator_id === user.id 
+                ? updatedMatch.selected_side 
+                : (updatedMatch.selected_side === 'heads' ? 'tails' : 'heads');
+              
+              // Показываем результат
+              useMatchStore.getState().setFlipResult({
+                result: updatedMatch.result,
+                winnerSide: updatedMatch.result,
+                userSide: userSide,
+                isFlipping: false,
+                showModal: true,
+              });
+            }
+          }
+        }
+        
+        // Обновляем список матчей
+        fetchMatches();
+      })
+      .subscribe();
 
     return () => {
-      unsubscribe();
+      channel.unsubscribe();
     };
-  }, [fetchMatches, subscribeToMatches]);
+  }, [fetchMatches]);
 
   // Fetch items for display
   const [allItems, setAllItems] = useState<any[]>([]);
