@@ -13,21 +13,32 @@ function App() {
   const [user, setUser] = useState(null);
 
   useEffect(() => {
-    // Check current session with error handling for invalid refresh tokens
-    supabase.auth.getSession().then(({ data: { session }, error }) => {
-      if (error) {
-        // Check if the error is related to invalid refresh token
-        if (error.message?.includes('Invalid Refresh Token') || 
-            error.message?.includes('refresh_token_not_found')) {
-          // Clear the invalid session from local storage
-          supabase.auth.signOut();
-          setUser(null);
-          return;
+    // Check current session with proper error handling for invalid refresh tokens
+    const initializeAuth = async () => {
+      try {
+        const { data: { session }, error } = await supabase.auth.getSession();
+        
+        if (error) {
+          // Check if the error is related to invalid refresh token
+          if (error.message?.includes('Invalid Refresh Token') || 
+              error.message?.includes('refresh_token_not_found')) {
+            // Clear the invalid session from local storage
+            await supabase.auth.signOut();
+            setUser(null);
+            return;
+          }
+          console.error('Session error:', error);
         }
-        console.error('Session error:', error);
+        
+        setUser(session?.user || null);
+      } catch (error) {
+        // Handle any unexpected errors during session initialization
+        console.error('Failed to initialize auth session:', error);
+        setUser(null);
       }
-      setUser(session?.user || null);
-    });
+    };
+
+    initializeAuth();
 
     // Listen for auth changes
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
