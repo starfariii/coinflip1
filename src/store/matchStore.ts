@@ -73,7 +73,10 @@ export const useMatchStore = create<MatchStore>((set, get) => ({
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) return;
 
-    // Remove items from user's inventory first - remove only selected instances by inventory index
+    // Extract just the item IDs for the match
+    const itemIds = selectedItems.map(item => item.itemId);
+
+    // Remove items from user's inventory first
     const { data: inventoryData } = await supabase
       .from('user_inventory')
       .select('items_ids')
@@ -81,13 +84,11 @@ export const useMatchStore = create<MatchStore>((set, get) => ({
       .maybeSingle();
 
     if (inventoryData && inventoryData.items_ids) {
-      // Create a copy of the inventory
       const updatedItemsIds = [...inventoryData.items_ids];
       
-      // Sort selected items by inventory index in descending order to avoid index shifting issues
+      // Sort by inventory index in descending order to avoid index shifting
       const sortedItems = selectedItems.sort((a, b) => b.inventoryIndex - a.inventoryIndex);
       
-      // Remove each selected item by its inventory index
       sortedItems.forEach(({ inventoryIndex }) => {
         if (inventoryIndex >= 0 && inventoryIndex < updatedItemsIds.length) {
           updatedItemsIds.splice(inventoryIndex, 1);
@@ -100,10 +101,7 @@ export const useMatchStore = create<MatchStore>((set, get) => ({
         .eq('user_id', user.id);
     }
 
-    // Extract just the item IDs for the match
-    const itemIds = selectedItems.map(item => item.itemId);
-
-    // Create the match with items
+    // Create the match
     const { data: match } = await supabase
       .from('matches')
       .insert({ 

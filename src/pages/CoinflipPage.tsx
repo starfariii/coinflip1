@@ -35,6 +35,12 @@ export const CoinflipPage: React.FC = () => {
     fetchUser();
     fetchMatches();
 
+    // Set up interval to clean up completed matches every minute
+    const cleanupInterval = setInterval(async () => {
+      await supabase.rpc('cleanup_completed_matches');
+      fetchMatches(); // Refresh the matches list
+    }, 60000); // Every 60 seconds
+
     // Subscribe to changes for real-time coin flip synchronization
     const channel = supabase
       .channel('matches')
@@ -89,6 +95,7 @@ export const CoinflipPage: React.FC = () => {
       .subscribe();
 
     return () => {
+      clearInterval(cleanupInterval);
       channel.unsubscribe();
     };
   }, [fetchMatches, setFlipResult]);
